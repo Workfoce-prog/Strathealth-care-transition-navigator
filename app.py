@@ -1,22 +1,15 @@
+import re
 from pathlib import Path
-from typing import List
 
 import pandas as pd
+import streamlit as st
 
-from scoring import score_patients, top_drivers, workflow_action
 
-
-# ---------------------------------------------------------
-# Project paths
-# ---------------------------------------------------------
 ROOT_DIR = Path(__file__).resolve().parent
 DATA_FILE = ROOT_DIR / "synthetic_patients.csv"
 
 
-# ---------------------------------------------------------
-# Expected source columns
-# ---------------------------------------------------------
-EXPECTED_COLUMNS: List[str] = [
+REQUIRED_COLUMNS = [
     "patient_id",
     "age",
     "sex",
@@ -32,13 +25,149 @@ EXPECTED_COLUMNS: List[str] = [
 ]
 
 
-# ---------------------------------------------------------
-# Normalize Yes/No variables
-# ---------------------------------------------------------
+COLUMN_ALIASES = {
+    # Patient identifier
+    "patient": "patient_id",
+    "patient_number": "patient_id",
+    "member_id": "patient_id",
+    "person_id": "patient_id",
+    "id": "patient_id",
+
+    # Demographics
+    "gender": "sex",
+    "patient_age": "age",
+    "age_years": "age",
+
+    # Conditions
+    "number_chronic_conditions": "chronic_conditions",
+    "num_chronic_conditions": "chronic_conditions",
+    "chronic_condition_count": "chronic_conditions",
+    "condition_count": "chronic_conditions",
+
+    # Prior utilization
+    "previous_admissions": "prior_admissions",
+    "past_admissions": "prior_admissions",
+    "admissions_last_year": "prior_admissions",
+    "prior_hospitalizations": "prior_admissions",
+
+    "previous_ed_visits": "prior_ed_visits",
+    "emergency_visits": "prior_ed_visits",
+    "ed_visits": "prior_ed_visits",
+    "ed_visits_last_year": "prior_ed_visits",
+
+    # Current encounter
+    "los": "length_of_stay",
+    "hospital_length_of_stay": "length_of_stay",
+    "days_in_hospital": "length_of_stay",
+
+    # Medications
+    "number_medications": "medication_count",
+    "num_medications": "medication_count",
+    "medications": "medication_count",
+    "medication_total": "medication_count",
+
+    # Follow-up
+    "follow_up_scheduled": "followup_scheduled",
+    "followup": "followup_scheduled",
+    "follow_up": "followup_scheduled",
+    "appointment_scheduled": "followup_scheduled",
+
+    # Primary care
+    "primary_care_connection": "primary_care_connected",
+    "pcp_connected": "primary_care_connected",
+    "has_primary_care": "primary_care_connected",
+    "primary_care_provider": "primary_care_connected",
+
+    # Social-needs indicators
+    "transport_barrier": "transportation_barrier",
+    "transportation_issue": "transportation_barrier",
+    "transportation_need": "transportation_barrier",
+
+    "living_alone": "lives_alone",
+    "patient_lives_alone": "lives_alone",
+}
+
+
+DEFAULT_VALUES = {
+    "patient_id": None,
+    "age": 65,
+    "sex": "Unknown",
+    "chronic_conditions": 0,
+    "prior_admissions": 0,
+    "prior_ed_visits": 0,
+    "length_of_stay": 1,
+    "medication_count": 0,
+    "followup_scheduled": "No",
+    "primary_care_connected": "No",
+    "transportation_barrier": "No",
+    "lives_alone": "No",
+}
+
+
+def normalize_column_name(column_name: str) -> str:
+    """
+    Convert column names to lowercase snake_case.
+    """
+
+    name = str(column_name).strip().lower()
+    name = re.sub(r"[^a-z0-9]+", "_", name)
+    name = re.sub(r"_+", "_", name)
+
+    return name.strip("_")
+
+
+def standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Standardize CSV column names and apply known aliases.
+    """
+
+    standardized = df.copy()
+
+    standardized.columns = [
+        normalize_column_name(column)
+        for column in standardized.columns
+    ]
+
+    rename_map = {
+        column: COLUMN_ALIASES[column]
+        for column in standardized.columns
+        if column in COLUMN_ALIASES
+    }
+
+    standardized = standardized.rename(columns=rename_map)
+
+    # Remove duplicated columns that may result from aliases.
+    standardized = standardized.loc[
+        :,
+        ~standardized.columns.duplicated()
+    ]
+
+    return standardized
+
+
+def add_missing_demo_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add missing fields using safe synthetic demonstration defaults.
+    """
+
+    completed = df.copy()
+
+    for column, default_value in DEFAULT_VALUES.items():
+        if column not in completed.columns:
+            if column == "patient_id":
+                completed[column] = [
+                    f"DEMO-{number:04d}"
+                    for number in range(1, len(completed) + 1)
+                ]
+            else:
+                completed[column] = default_value
+
+    return completed
+
+
 def normalize_yes_no(value) -> str:
     """
-    Convert common boolean and Yes/No representations to
-    standardized values of 'Yes' or 'No'.
+    Standardize common boolean values as Yes or No.
     """
 
     if pd.isna(value):
@@ -52,70 +181,15 @@ def normalize_yes_no(value) -> str:
         "true",
         "1",
         "1.0",
+        "positive",
     }
 
     return "Yes" if normalized in yes_values else "No"
 
 
-# ---------------------------------------------------------
-# Normalize priority values
-# ---------------------------------------------------------
-def normalize_priority(value) -> str:
-    """
-    Standardize patient priority labels.
-    """
-
-    if pd.isna(value):
-        return "Routine"
-
-    normalized = str(value).strip().lower()
-
-    priority_map = {
-        "routine": "Routine",
-        "low": "Routine",
-        "moderate": "Moderate",
-        "medium": "Moderate",
-        "high": "High",
-        "critical": "Critical",
-        "severe": "Critical",
-    }
-
-    return priority_map.get(normalized, "Routine")
-
-
-# ---------------------------------------------------------
-# Validate source dataset
-# ---------------------------------------------------------
-def validate_source_data(df: pd.DataFrame) -> None:
-    """
-    Validate that the synthetic patient dataset contains
-    the minimum columns required by the scoring functions.
-    """
-
-    if df.empty:
-        raise ValueError(
-            "The synthetic patient dataset is empty."
-        )
-
-    missing_columns = [
-        column
-        for column in EXPECTED_COLUMNS
-        if column not in df.columns
-    ]
-
-    if missing_columns:
-        raise KeyError(
-            "The synthetic patient dataset is missing required columns: "
-            + ", ".join(missing_columns)
-        )
-
-
-# ---------------------------------------------------------
-# Clean source dataset
-# ---------------------------------------------------------
 def clean_source_data(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Clean and standardize the synthetic patient dataset.
+    Clean numeric, categorical, and Yes/No fields.
     """
 
     cleaned = df.copy()
@@ -133,19 +207,17 @@ def clean_source_data(df: pd.DataFrame) -> pd.DataFrame:
         cleaned[column] = pd.to_numeric(
             cleaned[column],
             errors="coerce",
-        ).fillna(0)
+        ).fillna(DEFAULT_VALUES[column])
 
-    cleaned["age"] = cleaned["age"].clip(lower=0, upper=110)
+    cleaned["age"] = cleaned["age"].clip(0, 110)
 
-    nonnegative_columns = [
+    for column in [
         "chronic_conditions",
         "prior_admissions",
         "prior_ed_visits",
         "length_of_stay",
         "medication_count",
-    ]
-
-    for column in nonnegative_columns:
+    ]:
         cleaned[column] = cleaned[column].clip(lower=0)
 
     yes_no_columns = [
@@ -156,9 +228,7 @@ def clean_source_data(df: pd.DataFrame) -> pd.DataFrame:
     ]
 
     for column in yes_no_columns:
-        cleaned[column] = cleaned[column].apply(
-            normalize_yes_no
-        )
+        cleaned[column] = cleaned[column].apply(normalize_yes_no)
 
     cleaned["patient_id"] = (
         cleaned["patient_id"]
@@ -176,199 +246,67 @@ def clean_source_data(df: pd.DataFrame) -> pd.DataFrame:
     return cleaned
 
 
-# ---------------------------------------------------------
-# Load and score patient data
-# ---------------------------------------------------------
+def validate_source_data(df: pd.DataFrame) -> None:
+    """
+    Confirm that the standardized demonstration dataset is usable.
+    """
+
+    if df.empty:
+        raise ValueError(
+            "The synthetic patient dataset contains no records."
+        )
+
+    missing_columns = [
+        column
+        for column in REQUIRED_COLUMNS
+        if column not in df.columns
+    ]
+
+    if missing_columns:
+        raise KeyError(
+            "Required columns are still missing after standardization: "
+            + ", ".join(missing_columns)
+        )
+
+
+@st.cache_data
 def load_data() -> pd.DataFrame:
     """
-    Load synthetic patient records, clean the data, calculate
-    modeled risk scores, assign priority groups, identify leading
-    risk drivers, and generate illustrative workflow actions.
-
-    Returns
-    -------
-    pandas.DataFrame
-        Scored synthetic patient data.
-
-    Raises
-    ------
-    FileNotFoundError
-        If synthetic_patients.csv is not found.
-
-    ValueError
-        If the dataset is empty or scoring returns an invalid result.
-
-    KeyError
-        If required columns are missing.
+    Load, standardize, clean, and score synthetic patient data.
     """
 
     if not DATA_FILE.exists():
         raise FileNotFoundError(
-            "The synthetic patient dataset could not be found.\n\n"
-            f"Expected location: {DATA_FILE}\n\n"
-            "Confirm that synthetic_patients.csv is uploaded to "
-            "the same GitHub directory as app.py and data.py."
+            f"Cannot find the data file: {DATA_FILE}"
         )
 
-    try:
-        df = pd.read_csv(DATA_FILE)
-    except pd.errors.EmptyDataError as exc:
-        raise ValueError(
-            "synthetic_patients.csv exists, but it contains no data."
-        ) from exc
-    except pd.errors.ParserError as exc:
-        raise ValueError(
-            "synthetic_patients.csv could not be parsed. "
-            "Check the CSV formatting."
-        ) from exc
+    df = pd.read_csv(DATA_FILE)
 
+    if df.empty:
+        raise ValueError(
+            "synthetic_patients.csv contains no patient records."
+        )
+
+    # Fix inconsistent column names.
+    df = standardize_columns(df)
+
+    # Add any fields absent from the original demonstration CSV.
+    df = add_missing_demo_columns(df)
+
+    # Validate after standardization and default creation.
     validate_source_data(df)
 
+    # Clean all values.
     df = clean_source_data(df)
 
-    # score_patients must return a DataFrame containing:
-    # risk_score and priority
-    scored_df = score_patients(df)
+    # Use your existing scoring function.
+    df = score_patients(df)
 
-    if scored_df is None:
-        raise ValueError(
-            "score_patients returned no result."
-        )
-
-    if not isinstance(scored_df, pd.DataFrame):
-        raise TypeError(
-            "score_patients must return a pandas DataFrame."
-        )
-
-    required_scored_columns = {
-        "risk_score",
-        "priority",
-    }
-
-    missing_scored_columns = (
-        required_scored_columns.difference(scored_df.columns)
-    )
-
-    if missing_scored_columns:
-        raise KeyError(
-            "The scoring function did not create these required columns: "
-            + ", ".join(sorted(missing_scored_columns))
-        )
-
-    scored_df["risk_score"] = pd.to_numeric(
-        scored_df["risk_score"],
-        errors="coerce",
-    ).fillna(0)
-
-    scored_df["risk_score"] = scored_df["risk_score"].clip(
-        lower=0,
-        upper=100,
-    )
-
-    scored_df["priority"] = scored_df["priority"].apply(
-        normalize_priority
-    )
-
-    # Add explainability fields.
-    scored_df["top_drivers"] = scored_df.apply(
-        top_drivers,
-        axis=1,
-    )
-
-    # Add illustrative care-coordination workflow.
-    scored_df["workflow_action"] = scored_df.apply(
+    # Add explanations and suggested workflows.
+    df["top_drivers"] = df.apply(top_drivers, axis=1)
+    df["workflow_action"] = df.apply(
         workflow_action,
         axis=1,
     )
 
-    priority_order = {
-        "Critical": 1,
-        "High": 2,
-        "Moderate": 3,
-        "Routine": 4,
-    }
-
-    scored_df["_priority_order"] = (
-        scored_df["priority"]
-        .map(priority_order)
-        .fillna(5)
-    )
-
-    scored_df = (
-        scored_df
-        .sort_values(
-            by=["_priority_order", "risk_score"],
-            ascending=[True, False],
-        )
-        .drop(columns=["_priority_order"])
-        .reset_index(drop=True)
-    )
-
-    return scored_df
-
-
-# ---------------------------------------------------------
-# Optional summary function
-# ---------------------------------------------------------
-def get_data_summary(df: pd.DataFrame) -> dict:
-    """
-    Return summary statistics used by the Streamlit dashboard.
-    """
-
-    required_columns = {
-        "priority",
-        "followup_scheduled",
-        "risk_score",
-    }
-
-    missing_columns = required_columns.difference(df.columns)
-
-    if missing_columns:
-        raise KeyError(
-            "Cannot create the dashboard summary because these "
-            "columns are missing: "
-            + ", ".join(sorted(missing_columns))
-        )
-
-    high_or_critical = int(
-        df["priority"].isin(["High", "Critical"]).sum()
-    )
-
-    no_followup = int(
-        df["followup_scheduled"]
-        .astype(str)
-        .str.strip()
-        .str.lower()
-        .eq("no")
-        .sum()
-    )
-
-    return {
-        "total_patients": int(len(df)),
-        "high_or_critical": high_or_critical,
-        "no_followup": no_followup,
-        "average_risk": float(df["risk_score"].mean()),
-    }
-
-
-# ---------------------------------------------------------
-# Local testing
-# ---------------------------------------------------------
-if __name__ == "__main__":
-    try:
-        patient_data = load_data()
-
-        print("Synthetic patient data loaded successfully.")
-        print(f"Number of patients: {len(patient_data):,}")
-        print("\nAvailable columns:")
-        print(patient_data.columns.tolist())
-
-        print("\nPriority distribution:")
-        print(patient_data["priority"].value_counts())
-
-        print("\nDashboard summary:")
-        print(get_data_summary(patient_data))
-
-    except Exception as error:
-        print(f"Data loading failed: {error}")
-        raise
+    return df
