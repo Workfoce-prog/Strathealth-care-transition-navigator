@@ -1,299 +1,374 @@
 from pathlib import Path
-import sys
+from typing import List
 
-import streamlit as st
+import pandas as pd
+
+from scoring import score_patients, top_drivers, workflow_action
+
 
 # ---------------------------------------------------------
-# Project path setup
+# Project paths
 # ---------------------------------------------------------
 ROOT_DIR = Path(__file__).resolve().parent
-
-if ROOT_DIR.name == "pages":
-    ROOT_DIR = ROOT_DIR.parent
-
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
-# ---------------------------------------------------------
-# Local imports
-# These files must be in the repository root:
-# data.py
-# ui.py
-# ---------------------------------------------------------
-from data import load_data
-from ui import page_header
+DATA_FILE = ROOT_DIR / "synthetic_patients.csv"
 
 
 # ---------------------------------------------------------
-# Streamlit page configuration
+# Expected source columns
 # ---------------------------------------------------------
-st.set_page_config(
-    page_title="StratHealth AI",
-    page_icon="🏥",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-
-# ---------------------------------------------------------
-# Load data
-# ---------------------------------------------------------
-@st.cache_data
-def get_data():
-    return load_data()
-
-
-try:
-    df = get_data()
-except FileNotFoundError as exc:
-    st.error(
-        "The synthetic patient data file could not be found. "
-        "Confirm that synthetic_patients.csv is in the repository root."
-    )
-    st.exception(exc)
-    st.stop()
-except KeyError as exc:
-    st.error(
-        "The patient dataset is missing one or more required columns. "
-        "Check the column names in synthetic_patients.csv."
-    )
-    st.exception(exc)
-    st.stop()
-except Exception as exc:
-    st.error("The application could not load the demonstration data.")
-    st.exception(exc)
-    st.stop()
-
-
-# ---------------------------------------------------------
-# Validate required columns
-# ---------------------------------------------------------
-required_columns = {
-    "priority",
+EXPECTED_COLUMNS: List[str] = [
+    "patient_id",
+    "age",
+    "sex",
+    "chronic_conditions",
+    "prior_admissions",
+    "prior_ed_visits",
+    "length_of_stay",
+    "medication_count",
     "followup_scheduled",
-    "risk_score",
-}
-
-missing_columns = required_columns.difference(df.columns)
-
-if missing_columns:
-    st.error(
-        "The dataset is missing these required columns: "
-        + ", ".join(sorted(missing_columns))
-    )
-    st.stop()
+    "primary_care_connected",
+    "transportation_barrier",
+    "lives_alone",
+]
 
 
 # ---------------------------------------------------------
-# Sidebar
+# Normalize Yes/No variables
 # ---------------------------------------------------------
-with st.sidebar:
-    st.markdown("## StratHealth AI")
-    st.caption("Care Transition Navigator")
-
-    st.markdown("---")
-
-    st.markdown("### Demonstration status")
-    st.success("Synthetic data only")
-
-    st.markdown("### Intended purpose")
-    st.write(
-        "Demonstrate explainable patient prioritization and post-discharge "
-        "care-coordination workflows."
-    )
-
-    st.markdown("### Not intended for")
-    st.write(
-        "Diagnosis, treatment selection, medication changes, or autonomous "
-        "clinical decision-making."
-    )
-
-    st.markdown("---")
-
-    st.caption(
-        "A demonstration product of StratDesign Solutions — "
-        "AI & Analytics Solutions."
-    )
-
-
-# ---------------------------------------------------------
-# Header
-# ---------------------------------------------------------
-page_header(
-    "StratHealth AI — Care Transition Navigator",
-    "Explainable post-discharge risk and follow-up prioritization demonstration",
-)
-
-
-# ---------------------------------------------------------
-# Introductory banner
-# ---------------------------------------------------------
-st.info(
-    "This prototype uses synthetic patient records and illustrative risk "
-    "thresholds. It is designed to demonstrate workflow concepts and is not "
-    "connected to an electronic health record."
-)
-
-
-# ---------------------------------------------------------
-# Key metrics
-# ---------------------------------------------------------
-high_critical_count = int(
-    df["priority"].isin(["High", "Critical"]).sum()
-)
-
-no_followup_count = int(
-    df["followup_scheduled"]
-    .astype(str)
-    .str.strip()
-    .str.lower()
-    .eq("no")
-    .sum()
-)
-
-average_risk = float(df["risk_score"].mean())
-
-c1, c2, c3, c4 = st.columns(4)
-
-c1.metric(
-    label="Synthetic patients",
-    value=f"{len(df):,}",
-)
-
-c2.metric(
-    label="High or critical",
-    value=f"{high_critical_count:,}",
-)
-
-c3.metric(
-    label="No follow-up scheduled",
-    value=f"{no_followup_count:,}",
-)
-
-c4.metric(
-    label="Average modeled risk",
-    value=f"{average_risk:.1f}/100",
-)
-
-
-st.markdown("---")
-
-
-# ---------------------------------------------------------
-# Main content
-# ---------------------------------------------------------
-left_col, right_col = st.columns([1.4, 1])
-
-with left_col:
-    st.markdown("### What this prototype demonstrates")
-
-    st.write(
-        "The Care Transition Navigator helps care teams identify which "
-        "recently discharged patients may benefit from earlier review. "
-        "It also shows the main factors contributing to a patient's priority "
-        "score and allows users to test illustrative care-coordination scenarios."
-    )
-
-    st.markdown("### Core capabilities")
-
-    st.markdown(
-        """
-        - Prioritize recently discharged patients for follow-up
-        - Classify patients into routine, moderate, high, and critical groups
-        - Display the major factors contributing to modeled risk
-        - Identify patients without scheduled follow-up
-        - Support care-coordination workflow planning
-        - Demonstrate responsible and explainable AI controls
-        """
-    )
-
-    st.markdown("### Navigate the demonstration")
-
-    st.write(
-        "Use the pages in the left sidebar to review the executive dashboard, "
-        "patient priority worklist, individual risk profile, intervention "
-        "simulator, model performance, and AI governance documentation."
-    )
-
-with right_col:
-    st.markdown("### Intended users")
-
-    st.markdown(
-        """
-        - Care coordinators
-        - Transitional-care nurses
-        - Quality-improvement teams
-        - Population-health teams
-        - Clinical operations leaders
-        - Healthcare analytics teams
-        """
-    )
-
-    st.markdown("### Illustrative workflow")
-
-    st.markdown(
-        """
-        1. Review the prioritized patient worklist  
-        2. Open a patient's risk profile  
-        3. Examine the leading modeled risk factors  
-        4. Review follow-up and care-coordination needs  
-        5. Test illustrative intervention scenarios  
-        6. Document clinician or care-team review  
-        """
-    )
-
-
-st.markdown("---")
-
-
-# ---------------------------------------------------------
-# Priority summary
-# ---------------------------------------------------------
-st.markdown("### Patient priority overview")
-
-priority_order = ["Routine", "Moderate", "High", "Critical"]
-
-priority_summary = (
-    df["priority"]
-    .value_counts()
-    .reindex(priority_order, fill_value=0)
-    .rename_axis("Priority")
-    .reset_index(name="Patients")
-)
-
-st.dataframe(
-    priority_summary,
-    use_container_width=True,
-    hide_index=True,
-)
-
-
-# ---------------------------------------------------------
-# Limitations
-# ---------------------------------------------------------
-st.markdown("### Important limitations")
-
-st.warning(
+def normalize_yes_no(value) -> str:
     """
-    This application is a demonstration only.
-
-    - It is not connected to an electronic health record.
-    - It has not been clinically validated.
-    - All patient records are synthetic.
-    - Risk probabilities and thresholds are illustrative.
-    - Suggested workflows are operational examples, not treatment recommendations.
-    - A qualified clinician or care professional must make all final decisions.
+    Convert common boolean and Yes/No representations to
+    standardized values of 'Yes' or 'No'.
     """
-)
+
+    if pd.isna(value):
+        return "No"
+
+    normalized = str(value).strip().lower()
+
+    yes_values = {
+        "yes",
+        "y",
+        "true",
+        "1",
+        "1.0",
+    }
+
+    return "Yes" if normalized in yes_values else "No"
 
 
 # ---------------------------------------------------------
-# Footer
+# Normalize priority values
 # ---------------------------------------------------------
-st.markdown("---")
+def normalize_priority(value) -> str:
+    """
+    Standardize patient priority labels.
+    """
 
-st.caption(
-    "StratHealth AI Care Transition Navigator | "
-    "StratDesign Solutions — AI & Analytics Solutions | "
-    "Synthetic demonstration data only"
-)
+    if pd.isna(value):
+        return "Routine"
+
+    normalized = str(value).strip().lower()
+
+    priority_map = {
+        "routine": "Routine",
+        "low": "Routine",
+        "moderate": "Moderate",
+        "medium": "Moderate",
+        "high": "High",
+        "critical": "Critical",
+        "severe": "Critical",
+    }
+
+    return priority_map.get(normalized, "Routine")
+
+
+# ---------------------------------------------------------
+# Validate source dataset
+# ---------------------------------------------------------
+def validate_source_data(df: pd.DataFrame) -> None:
+    """
+    Validate that the synthetic patient dataset contains
+    the minimum columns required by the scoring functions.
+    """
+
+    if df.empty:
+        raise ValueError(
+            "The synthetic patient dataset is empty."
+        )
+
+    missing_columns = [
+        column
+        for column in EXPECTED_COLUMNS
+        if column not in df.columns
+    ]
+
+    if missing_columns:
+        raise KeyError(
+            "The synthetic patient dataset is missing required columns: "
+            + ", ".join(missing_columns)
+        )
+
+
+# ---------------------------------------------------------
+# Clean source dataset
+# ---------------------------------------------------------
+def clean_source_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Clean and standardize the synthetic patient dataset.
+    """
+
+    cleaned = df.copy()
+
+    numeric_columns = [
+        "age",
+        "chronic_conditions",
+        "prior_admissions",
+        "prior_ed_visits",
+        "length_of_stay",
+        "medication_count",
+    ]
+
+    for column in numeric_columns:
+        cleaned[column] = pd.to_numeric(
+            cleaned[column],
+            errors="coerce",
+        ).fillna(0)
+
+    cleaned["age"] = cleaned["age"].clip(lower=0, upper=110)
+
+    nonnegative_columns = [
+        "chronic_conditions",
+        "prior_admissions",
+        "prior_ed_visits",
+        "length_of_stay",
+        "medication_count",
+    ]
+
+    for column in nonnegative_columns:
+        cleaned[column] = cleaned[column].clip(lower=0)
+
+    yes_no_columns = [
+        "followup_scheduled",
+        "primary_care_connected",
+        "transportation_barrier",
+        "lives_alone",
+    ]
+
+    for column in yes_no_columns:
+        cleaned[column] = cleaned[column].apply(
+            normalize_yes_no
+        )
+
+    cleaned["patient_id"] = (
+        cleaned["patient_id"]
+        .astype(str)
+        .str.strip()
+    )
+
+    cleaned["sex"] = (
+        cleaned["sex"]
+        .fillna("Unknown")
+        .astype(str)
+        .str.strip()
+    )
+
+    return cleaned
+
+
+# ---------------------------------------------------------
+# Load and score patient data
+# ---------------------------------------------------------
+def load_data() -> pd.DataFrame:
+    """
+    Load synthetic patient records, clean the data, calculate
+    modeled risk scores, assign priority groups, identify leading
+    risk drivers, and generate illustrative workflow actions.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Scored synthetic patient data.
+
+    Raises
+    ------
+    FileNotFoundError
+        If synthetic_patients.csv is not found.
+
+    ValueError
+        If the dataset is empty or scoring returns an invalid result.
+
+    KeyError
+        If required columns are missing.
+    """
+
+    if not DATA_FILE.exists():
+        raise FileNotFoundError(
+            "The synthetic patient dataset could not be found.\n\n"
+            f"Expected location: {DATA_FILE}\n\n"
+            "Confirm that synthetic_patients.csv is uploaded to "
+            "the same GitHub directory as app.py and data.py."
+        )
+
+    try:
+        df = pd.read_csv(DATA_FILE)
+    except pd.errors.EmptyDataError as exc:
+        raise ValueError(
+            "synthetic_patients.csv exists, but it contains no data."
+        ) from exc
+    except pd.errors.ParserError as exc:
+        raise ValueError(
+            "synthetic_patients.csv could not be parsed. "
+            "Check the CSV formatting."
+        ) from exc
+
+    validate_source_data(df)
+
+    df = clean_source_data(df)
+
+    # score_patients must return a DataFrame containing:
+    # risk_score and priority
+    scored_df = score_patients(df)
+
+    if scored_df is None:
+        raise ValueError(
+            "score_patients returned no result."
+        )
+
+    if not isinstance(scored_df, pd.DataFrame):
+        raise TypeError(
+            "score_patients must return a pandas DataFrame."
+        )
+
+    required_scored_columns = {
+        "risk_score",
+        "priority",
+    }
+
+    missing_scored_columns = (
+        required_scored_columns.difference(scored_df.columns)
+    )
+
+    if missing_scored_columns:
+        raise KeyError(
+            "The scoring function did not create these required columns: "
+            + ", ".join(sorted(missing_scored_columns))
+        )
+
+    scored_df["risk_score"] = pd.to_numeric(
+        scored_df["risk_score"],
+        errors="coerce",
+    ).fillna(0)
+
+    scored_df["risk_score"] = scored_df["risk_score"].clip(
+        lower=0,
+        upper=100,
+    )
+
+    scored_df["priority"] = scored_df["priority"].apply(
+        normalize_priority
+    )
+
+    # Add explainability fields.
+    scored_df["top_drivers"] = scored_df.apply(
+        top_drivers,
+        axis=1,
+    )
+
+    # Add illustrative care-coordination workflow.
+    scored_df["workflow_action"] = scored_df.apply(
+        workflow_action,
+        axis=1,
+    )
+
+    priority_order = {
+        "Critical": 1,
+        "High": 2,
+        "Moderate": 3,
+        "Routine": 4,
+    }
+
+    scored_df["_priority_order"] = (
+        scored_df["priority"]
+        .map(priority_order)
+        .fillna(5)
+    )
+
+    scored_df = (
+        scored_df
+        .sort_values(
+            by=["_priority_order", "risk_score"],
+            ascending=[True, False],
+        )
+        .drop(columns=["_priority_order"])
+        .reset_index(drop=True)
+    )
+
+    return scored_df
+
+
+# ---------------------------------------------------------
+# Optional summary function
+# ---------------------------------------------------------
+def get_data_summary(df: pd.DataFrame) -> dict:
+    """
+    Return summary statistics used by the Streamlit dashboard.
+    """
+
+    required_columns = {
+        "priority",
+        "followup_scheduled",
+        "risk_score",
+    }
+
+    missing_columns = required_columns.difference(df.columns)
+
+    if missing_columns:
+        raise KeyError(
+            "Cannot create the dashboard summary because these "
+            "columns are missing: "
+            + ", ".join(sorted(missing_columns))
+        )
+
+    high_or_critical = int(
+        df["priority"].isin(["High", "Critical"]).sum()
+    )
+
+    no_followup = int(
+        df["followup_scheduled"]
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .eq("no")
+        .sum()
+    )
+
+    return {
+        "total_patients": int(len(df)),
+        "high_or_critical": high_or_critical,
+        "no_followup": no_followup,
+        "average_risk": float(df["risk_score"].mean()),
+    }
+
+
+# ---------------------------------------------------------
+# Local testing
+# ---------------------------------------------------------
+if __name__ == "__main__":
+    try:
+        patient_data = load_data()
+
+        print("Synthetic patient data loaded successfully.")
+        print(f"Number of patients: {len(patient_data):,}")
+        print("\nAvailable columns:")
+        print(patient_data.columns.tolist())
+
+        print("\nPriority distribution:")
+        print(patient_data["priority"].value_counts())
+
+        print("\nDashboard summary:")
+        print(get_data_summary(patient_data))
+
+    except Exception as error:
+        print(f"Data loading failed: {error}")
+        raise
